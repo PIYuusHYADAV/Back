@@ -1,5 +1,5 @@
 from fastapi import FastAPI, File, UploadFile, HTTPException,Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse,JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from langchain_text_splitters  import RecursiveCharacterTextSplitter   
 from langchain_google_genai import GoogleGenerativeAIEmbeddings,ChatGoogleGenerativeAI
@@ -14,6 +14,10 @@ import psycopg2
 import uuid
 from typing import Optional
 from dotenv import load_dotenv
+import fitz
+import unicodedata
+
+
 load_dotenv()
 
 
@@ -25,6 +29,7 @@ conn = psycopg2.connect(
     user="postgres",
     password="postgres"
 )
+
 cursor = conn.cursor()
 pc=Pinecone(api_key=os.getenv("api_key_rag"))
 index = pc.Index("pdf-rag-index")
@@ -45,12 +50,42 @@ app.add_middleware(
 UPLOAD_FOLDER = os.path.join(os.getcwd(), "uploads")
 class QueryRequest(BaseModel):
     question: str
+    context:str
 
 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True) 
 
 ALLOWED_EXTENSIONS = {'pdf'}
 MAX_FILE_SIZE = 32 * 1024 * 1024  
+@app.post("/resolve")
+async def resolve_query(req:QueryRequest):
+    try:
+        question = req.question.strip()
+        context=req.context.strip()
+       
+        
+       
+      
+        prompt = f"""
+        You are an expert AI assistant answering questions based on your own knowledge:
+
+        CONTEXT:
+        {context}
+
+        INSTRUCTION:
+        {question} 
+
+        ANSWER:
+        """
+        answer = llm.invoke(prompt)
+        return {
+            "question": question,
+            "answer": answer,
+         
+        }
+        
+    except Exception as e:
+        raise e
 @app.post("/query")
 async def query(req:QueryRequest,userid:str=Query(...),conversation_id:str = Query(...)):
     try:
@@ -142,6 +177,32 @@ async def get_messages(conversation_id: str = Query(...)):
     }
 
 
+def normalize_text(text: str) -> str:
+  
+    return unicodedata.normalize("NFKC", text)
+
+def pdf_to_html_exact(pdf_bytes: bytes) -> str:
+   
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    html = "<div class='pdf-container' style='position:relative;'>"
+
+    for page_number, page in enumerate(doc, start=1):
+       
+        page_html = page.get_text("html")
+       
+        page_html = normalize_text(page_html)
+       
+        html += f"<div class='pdf-page' data-page='{page_number}'>{page_html}</div>"
+
+    html += "</div>"
+    return html
+@app.post("/ocr")
+async def ocr_endpoint(file: UploadFile = File(...)):
+    pdf_bytes = await file.read()
+    html = pdf_to_html_exact(pdf_bytes)
+    return {"html": html}
+
+
 @app.get("/conversations")
 async def get_conversations(userid: str = Query(...)):
     try:
@@ -172,11 +233,13 @@ async def get_conversations(userid: str = Query(...)):
     except Exception as e:
         print(e)
         return {"error": "Failed to fetch conversations"}
+    
 
 @app.post("/ask")
 async def ask(file: UploadFile = File(...), userid: str = Query(...)):
     pdf = PdfReader(file.file)
     conversation=upload_pdf(file,userid)
+    
     
     text = ""
 
