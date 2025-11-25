@@ -16,3 +16,7 @@ langchain-core==1.0.7
 sentence-transformers
 python-dotenv
 easyocr
+python-docx 
+html2docx
+xhtml2pdf
+python-pptx

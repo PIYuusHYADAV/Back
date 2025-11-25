@@ -1,5 +1,5 @@
 from fastapi import FastAPI, File, UploadFile, HTTPException,Query
-from fastapi.responses import FileResponse,JSONResponse
+from fastapi.responses import FileResponse,StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from langchain_text_splitters  import RecursiveCharacterTextSplitter   
 from langchain_google_genai import GoogleGenerativeAIEmbeddings,ChatGoogleGenerativeAI
@@ -16,8 +16,11 @@ from typing import Optional
 from dotenv import load_dotenv
 import fitz
 import unicodedata
-
-
+import os
+import io
+from html2docx import html2docx
+from xhtml2pdf import pisa
+from pptx import Presentation
 load_dotenv()
 
 
@@ -50,13 +53,53 @@ app.add_middleware(
 UPLOAD_FOLDER = os.path.join(os.getcwd(), "uploads")
 class QueryRequest(BaseModel):
     question: str
-    context:str
+    context: str | None = None
 
 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True) 
 
 ALLOWED_EXTENSIONS = {'pdf'}
 MAX_FILE_SIZE = 32 * 1024 * 1024  
+
+@app.post("/export-docx")
+async def export_docx(data: dict):
+   
+    html = data["html"]
+  
+    
+    
+
+
+    file_stream = html2docx(html, "My Document")
+    file_stream.seek(0)
+    
+
+    return StreamingResponse(
+        file_stream,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": "attachment; filename=document.docx"},
+    )
+    
+@app.post("/export-pdf")
+async def export_docx(data: dict):
+   
+    html = data["html"]
+  
+    pdf_stream = io.BytesIO()
+    pisa.CreatePDF(
+        html,
+        dest=pdf_stream
+    )
+
+
+    pdf_stream.seek(0)
+    
+
+    return StreamingResponse(
+        pdf_stream,
+        media_type="application/pdf",
+        headers={"Content-Disposition": "attachment; filename=document.pdf"},
+    )
 @app.post("/resolve")
 async def resolve_query(req:QueryRequest):
     try:
@@ -237,14 +280,32 @@ async def get_conversations(userid: str = Query(...)):
 
 @app.post("/ask")
 async def ask(file: UploadFile = File(...), userid: str = Query(...)):
-    pdf = PdfReader(file.file)
+   
     conversation=upload_pdf(file,userid)
-    
+    file_extension = file.filename.split(".")[-1].lower()
+
     
     text = ""
+    
 
-    for page in pdf.pages:
-        text += page.extract_text() + "\n"
+    if file_extension in ["pdf"]:
+       
+        pdf = PdfReader(file.file)
+
+        for page in pdf.pages:
+            content = page.extract_text()
+            if content:
+                text += content + "\n"
+    elif file_extension in ["ppt", "pptx"]:
+        
+        presentation = Presentation(file.file)
+
+        for slide in presentation.slides:
+            for shape in slide.shapes:
+                if hasattr(shape, "text") and shape.text:
+                    text += shape.text + "\n"
+    else:
+        return {"error": "Unsupported file format. Use PDF or PPTX."}
 
 
     splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
